@@ -17,7 +17,7 @@ use std::io::Read;
 
 pub const SECTOR_SIZE: usize             = 256;
 pub const SECTORS_PER_TRACK: usize       = 10;
-pub const TRACK_SIZE: usize              = DFS_SECTOR_SIZE * DFS_SECTORS_PER_TRACK;
+pub const TRACK_SIZE: usize              = SECTOR_SIZE * SECTORS_PER_TRACK;
 pub const LABEL_SIZE: usize              = 12;
 pub const FILENAME_LEN: usize            = 7;
 
@@ -116,7 +116,7 @@ impl DfsImg {
     // See http://www.cowsarenotpurple.co.uk/bbccomputer/native/adfs.html
     // for more info on DFS format.
     fn cat(&self) -> Cat {
-        let cat = Cat::default();
+        let mut cat = Cat::default();
 
         cat.label =
               Self::str_from_null_term(self.offs(0, 0, 8))
@@ -125,11 +125,14 @@ impl DfsImg {
         if cat.nfiles > (SECTOR_SIZE-8) {
             println!("warning - number of files ({:}) too large.", cat.nfiles);
         }
-        cat.nsectors = (((self.byte(1, 6) & 0x0f) << 8) + self.byte(1, 7)) as usize;
+        cat.nsectors = u16::from_le_bytes([
+            self.byte(1, 7),
+            self.byte(1, 6) & 0x0f,
+        ]) as usize;
         cat.boot_option = (self.byte(1, 6) >> 4) & 0xf;
         cat.files = Vec::new();
         for i in 0..cat.nfiles {
-            let file = CatFile::default();
+            let mut file = CatFile::default();
             let j = 8 + i * 8;
             // Sector 0 contains the name info in 8-byte blocks
             file.name = Self::str_from_null_term(self.offs(0, j, 7)).trim().into();
@@ -138,34 +141,40 @@ impl DfsImg {
             file.locked = self.byte(0, j + 7) & 0x80 > 0;
      
             // Sector 1 contains the addresses, lengths and locations.
-            file.load_addr =
-                *offs(img, 1, 8+i*8 + 0) + 
-                (*offs(img, 1, 8+i*8 + 1) << 8) +
-                (((*offs(img, 1, 8+i*8 + 6) >> 2) & 3) << 16);
-            file.exec_addr =
-                *offs(img, 1, 8+i*8 + 2) + 
-                (*offs(img, 1, 8+i*8 + 3) << 8) +
-                (((*offs(img, 1, 8+i*8 + 6) >> 6) & 3) << 16);
-            file.size =
-                *offs(img, 1, 8+i*8 + 4) + 
-                (*offs(img, 1, 8+i*8 + 5) << 8) +
-                (((*offs(img, 1, 8+i*8 + 6) >> 4) & 3) << 16);
-            file.sector =
-                *offs(img, 1, 8+i*8 + 7) + 
-                (((*offs(img, 1, 8+i*8 + 6) >> 0) & 3) << 8);
+            file.load_addr = u32::from_le_bytes([
+                self.byte(1, j + 0),
+                self.byte(1, j + 1),
+                (self.byte(1, j + 6) >> 2) & 3,
+                 0
+            ]);
+            file.exec_addr = u32::from_le_bytes([
+                self.byte(1, j + 2),
+                self.byte(1, j + 3),
+                (self.byte(1, j + 6) >> 6) & 3,
+                0
+            ]);
+            file.size = u32::from_le_bytes([
+                self.byte(1, j + 4),
+                self.byte(1, j + 5),
+                (self.byte(1, j + 6) >> 4) & 3,
+                0
+            ]);
+            file.sector = u16::from_le_bytes([
+                self.byte(1, j + 7),
+                (self.byte(1, j + 6) >> 0) & 3,
+            ]);
+            cat.files.push(file);
         }
         return cat;
     }
 
-    void dfs_cat_fprint(FILE *fp, dfs_cat_t *cat)
-    {
-        assert(cat != NULL);
-        assert(cat->files != NULL);
+    /* TODO
+    fn dfs_cat_fprint(FILE *fp, dfs_cat_t *cat) {
         char *label = strdup(cat->label);
         remove_nonprint_chars(label);
         fprintf(fp, "Label \"%s\", %2d tracks, boot option %2d, %2d files:\n",
                 label,
-                cat->nsectors/DFS_SECTORS_PER_TRACK,
+                cat->nsectors/SECTORS_PER_TRACK,
                 cat->boot_option,
                 cat->nfiles);
         for (int i = 0; i < cat->nfiles; i++) {
@@ -179,4 +188,5 @@ impl DfsImg {
                     f->size, f->sector, f->load_addr, f->exec_addr);
         }
     }
+    */
 }
