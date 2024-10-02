@@ -1,2 +1,7 @@
 *.o
 .*.swp
+
+
+# Added by cargo
+
+/target
