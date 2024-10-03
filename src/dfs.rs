@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
 /// DFS Tools
 ///
 /// BBC Micro DFS disc format
@@ -7,7 +10,6 @@
 
 use std::ops::{Index, IndexMut};
 use std::path::Path;
-use libc;
 use std::ffi::CString;
 use std::io;
 use std::io::BufReader;
@@ -22,9 +24,9 @@ pub const LABEL_SIZE: usize              = 12;
 pub const FILENAME_LEN: usize            = 7;
 
 #[derive(Default, Debug)]
-struct CatFile {
+pub struct CatFile {
     name: String,
-    dir: u8,
+    dir: char,
     locked: bool,
     load_addr: u32, 
     exec_addr: u32,
@@ -33,7 +35,7 @@ struct CatFile {
 }
 
 #[derive(Default, Debug)]
-struct Cat {
+pub struct Cat {
     label: String,
     nfiles: usize,
     files: Vec<CatFile>,
@@ -41,31 +43,49 @@ struct Cat {
     boot_option: u8,
 }
 
+impl Cat {
+    pub fn print(&self) {
+        let label = self.label.clone();
+        //remove_nonprint_chars(label);
+        println!("Label \"{:}\", {:2} tracks, boot option {:2}, {:2} files:",
+                label,
+                self.nsectors/SECTORS_PER_TRACK,
+                self.boot_option,
+                self.nfiles
+                );
+        for f in &self.files {
+            if f.dir == '$' { // Don't show default dir
+                print!("  {:-7}  ", f.name);
+            } else {
+                print!("{:}.{:-7}  ", f.dir, f.name);
+            }
+            println!(" size {:6}, sector {:3}, load 0x{:05X}, exec 0x{:05X}",
+                    f.size, f.sector, f.load_addr, f.exec_addr);
+        }
+    }
+}
+
 #[derive(Debug)]
-struct DfsImg {
+pub struct DfsImg {
     data: Vec<u8>,
+}
+
+fn ascii_to_char(a: u8) -> char {
+    char::from_u32(a as u32).unwrap()
 }
 
 impl DfsImg {
 
-    // Get size of file.
-    // Convenience wrapper for fstat.
-    fn filesize(file: &str) -> io::Result<usize> {
-        unsafe {
-            let fname = CString::new(file).unwrap();
-            let mut stat: libc::stat = std::mem::zeroed();
-            if libc::stat(fname.as_ptr(), &mut stat) >= 0 {
-                Ok(stat.st_size as usize)
-            } else {
-                Err(io::Error::last_os_error())
-            }
-        }
-    }
-
     pub fn from_file(filename: &str) -> io::Result<Self> {
         // TODO: proper error handling
 
-        let size = Self::filesize(filename).expect("File IO Error");
+        let my_buf = BufReader::new(File::open(filename)?);
+
+        let img = Self {
+            data: my_buf.bytes().collect::<Result<Vec<_>,_>>()?,
+        };
+
+        let size = img.data.len();
 
         // Check input file size makes sense
         if (size % TRACK_SIZE) > 0 {
@@ -79,12 +99,6 @@ impl DfsImg {
                     filename, size));
             return Err(err);
         }
-
-        let my_buf = BufReader::new(File::open(filename)?);
-
-        let img = Self {
-            data: my_buf.bytes().collect()?,
-        };
 
         return Ok(img);
     }
@@ -115,7 +129,7 @@ impl DfsImg {
     // Extract catalogue info from a DFS image.
     // See http://www.cowsarenotpurple.co.uk/bbccomputer/native/adfs.html
     // for more info on DFS format.
-    fn cat(&self) -> Cat {
+    pub fn cat(&self) -> Cat {
         let mut cat = Cat::default();
 
         cat.label =
@@ -137,7 +151,7 @@ impl DfsImg {
             // Sector 0 contains the name info in 8-byte blocks
             file.name = Self::str_from_null_term(self.offs(0, j, 7)).trim().into();
             // Dir and lock state
-            file.dir = self.byte(0, j + 7) & 0x7f;
+            file.dir = ascii_to_char(self.byte(0, j + 7) & 0x7f);
             file.locked = self.byte(0, j + 7) & 0x80 > 0;
      
             // Sector 1 contains the addresses, lengths and locations.
@@ -168,25 +182,4 @@ impl DfsImg {
         return cat;
     }
 
-    /* TODO
-    fn dfs_cat_fprint(FILE *fp, dfs_cat_t *cat) {
-        char *label = strdup(cat->label);
-        remove_nonprint_chars(label);
-        fprintf(fp, "Label \"%s\", %2d tracks, boot option %2d, %2d files:\n",
-                label,
-                cat->nsectors/SECTORS_PER_TRACK,
-                cat->boot_option,
-                cat->nfiles);
-        for (int i = 0; i < cat->nfiles; i++) {
-            dfs_cat_file_t *f = cat->files + i;
-            if (f->dir == '$') { // Don't show default dir
-                fprintf(fp, "  %-7s  ", f->name);
-            } else {
-                fprintf(fp, "%c.%-7s  ", f->dir, f->name);
-            }
-            fprintf(fp, " size %6d, sector %3d, load 0x%05X, exec 0x%05X\n",
-                    f->size, f->sector, f->load_addr, f->exec_addr);
-        }
-    }
-    */
 }
