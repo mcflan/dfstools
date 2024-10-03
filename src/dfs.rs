@@ -37,6 +37,7 @@ pub struct CatFile {
 #[derive(Default, Debug)]
 pub struct Cat {
     label: String,
+    cycle: u8,
     nfiles: usize,
     files: Vec<CatFile>,
     nsectors: usize,
@@ -47,8 +48,9 @@ impl Cat {
     pub fn print(&self) {
         let label = self.label.clone();
         //remove_nonprint_chars(label);
-        println!("Label \"{:}\", {:2} tracks, boot option {:2}, {:2} files:",
+        println!("Label \"{:} ({:})\", {:2} tracks, boot option {:2}, {:2} files:",
                 label,
+                self.cycle,
                 self.nsectors/SECTORS_PER_TRACK,
                 self.boot_option,
                 self.nfiles
@@ -128,13 +130,16 @@ impl DfsImg {
 
     // Extract catalogue info from a DFS image.
     // See http://www.cowsarenotpurple.co.uk/bbccomputer/native/adfs.html
-    // for more info on DFS format.
+    // for more info on DFS format, also:
+    // https://area51.dev/bbc/bbcmos/filesystems/dfs/
     pub fn cat(&self) -> Cat {
         let mut cat = Cat::default();
 
         cat.label =
               Self::str_from_null_term(self.offs(0, 0, 8))
             + &Self::str_from_null_term(self.offs(1, 0, 3));
+        // Cycle Number is in BCD format
+        cat.cycle = (self.byte(1, 4) >> 4) * 10 + (self.byte(1, 4) & 0xf);
         cat.nfiles = (self.byte(1, 5) >> 3) as usize;
         if cat.nfiles > (SECTOR_SIZE-8) {
             println!("warning - number of files ({:}) too large.", cat.nfiles);
