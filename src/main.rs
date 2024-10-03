@@ -20,7 +20,7 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
-    println!("Opening {:}", cli.image);
+    println!("Disk Image: {:}", cli.image);
     match DfsImg::from_file(&cli.image) {
         Ok(img) => {
             img.cat().print();

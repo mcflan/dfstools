@@ -8,9 +8,6 @@
 ///
 /// James Macfarlane 2024
 
-use std::ops::{Index, IndexMut};
-use std::path::Path;
-use std::ffi::CString;
 use std::io;
 use std::io::BufReader;
 use std::fs::File;
@@ -48,20 +45,24 @@ impl Cat {
     pub fn print(&self) {
         let label = self.label.clone();
         //remove_nonprint_chars(label);
-        println!("Label \"{:} ({:})\", {:2} tracks, boot option {:2}, {:2} files:",
+        println!("Label: \"{:}\" Cycle: {:}, Tracks: {:2}, Boot Opt: {:}. {:2} files:",
                 label,
                 self.cycle,
                 self.nsectors/SECTORS_PER_TRACK,
                 self.boot_option,
                 self.nfiles
                 );
+        if self.files.len() > 0 {
+            println!("   Name    Lock    Size    Sector  Load Addr  Exec Addr");
+        }
         for f in &self.files {
             if f.dir == '$' { // Don't show default dir
-                print!("  {:-7}  ", f.name);
+                print!("   {:-7}  ", f.name);
             } else {
-                print!("{:}.{:-7}  ", f.dir, f.name);
+                print!(" {:}.{:-7}  ", f.dir, f.name);
             }
-            println!(" size {:6}, sector {:3}, load 0x{:05X}, exec 0x{:05X}",
+            println!("  {:}  {:6}       {:3}    0x{:05X}    0x{:05X}",
+                    if f.locked {"L"} else {" "},
                     f.size, f.sector, f.load_addr, f.exec_addr);
         }
     }
