@@ -8,11 +8,9 @@
 ///
 /// James Macfarlane 2024
 
-use std::io;
-use std::io::BufReader;
+use std::io::{self, BufReader, Read};
 use std::fs::File;
-use std::io::Read;
-
+use std::path::Path;
 
 pub const SECTOR_SIZE: usize             = 256;
 pub const SECTORS_PER_TRACK: usize       = 10;
@@ -45,7 +43,7 @@ impl Cat {
     pub fn print(&self) {
         let label = self.label.clone();
         //remove_nonprint_chars(label);
-        println!("Label: \"{:}\" Cycle: {:}, Tracks: {:2}, Boot Opt: {:}. {:2} files:",
+        println!("Label: {:11} Cycle: {:}, Tracks: {:2}, Boot Opt: {:}, {:2} files.",
                 label,
                 self.cycle,
                 self.nsectors/SECTORS_PER_TRACK,
@@ -70,7 +68,8 @@ impl Cat {
 
 #[derive(Debug)]
 pub struct DfsImg {
-    data: Vec<u8>,
+    data: [Vec<u8>; 2],
+    dsd: bool,
 }
 
 fn ascii_to_char(a: u8) -> char {
@@ -80,44 +79,88 @@ fn ascii_to_char(a: u8) -> char {
 impl DfsImg {
 
     pub fn from_file(filename: &str) -> io::Result<Self> {
-        // TODO: proper error handling
 
-        let my_buf = BufReader::new(File::open(filename)?);
-
-        let img = Self {
-            data: my_buf.bytes().collect::<Result<Vec<_>,_>>()?,
+        // Use the file extension to determine if it's a single- or doube-side image.
+        let path = Path::new(filename);
+        let sided: Option<bool> = if let Some(ext) = path.extension() {
+            let ext = ext.to_str().expect("Some unicode problem?").to_lowercase();
+            if ext == "ssd" {
+                Some(false)
+            } else if ext == "dsd" {
+                Some(true)
+            } else {
+                None
+            }
+        } else {
+            None
         };
 
-        let size = img.data.len();
+        let dsd = if sided.is_none() {
+                eprintln!("Expected extension 'ssd' (single-sided) or 'dsd' (double-sided). Defaulting to single-sided.");
+                false
+            } else {
+                sided.unwrap()
+        };
+
+        let my_buf = BufReader::new(File::open(filename)?);
+        let data = my_buf.bytes().collect::<Result<Vec<_>,_>>()?;
+
+        let size = data.len() / if dsd { 2 } else { 1 };
 
         // Check input file size makes sense
         if (size % TRACK_SIZE) > 0 {
-            let err = io::Error::other(format!("{:}: size of file ({:}) is not a multiple of DFS track size ({:}).",
+            let err = io::Error::other(format!("{}: size of file ({:}) is not a multiple of DFS track size ({}).",
                     filename, size, TRACK_SIZE));
             return Err(err);
         }
 
         if (size / TRACK_SIZE) < 2 {
-            let err = io::Error::other(format!("{:}: size of file ({:}) is too small to hold a catalogue.",
+            let err = io::Error::other(format!("{}: size of file ({:}) is too small to hold a catalogue.",
                     filename, size));
             return Err(err);
         }
 
-        return Ok(img);
+        let tracks = size / TRACK_SIZE;
+
+        // Double-sided image has tracks interleaved
+        let mut side0: Vec<u8> = Vec::new();
+        let mut side1: Vec<u8> = Vec::new();
+        if dsd {
+            for t in 0..tracks {
+                let start0 = (t + 0) * TRACK_SIZE;
+                let start1 = (t + 1) * TRACK_SIZE;
+                side0.extend_from_slice(&data[start0..start0+TRACK_SIZE]);
+                side1.extend_from_slice(&data[start1..start1+TRACK_SIZE]);
+            }
+        } else {
+                side0.extend_from_slice(&data[..]);
+        }
+
+        Ok(Self {
+            data: [
+                side0,
+                side1,
+            ],
+            dsd,
+        })
+    }
+
+    pub fn dsd(&self) -> bool {
+        self.dsd
     }
 
     fn remove_nonprint_chars(s: String) -> String {
         s.replace(|c: char| !c.is_ascii(), " ")
     }
 
-    fn offs(&self, sector: usize, offset: usize, len: usize) -> &[u8] {
+    fn offs(&self, sfc: u8, sector: usize, offset: usize, len: usize) -> &[u8] {
         let start = sector * SECTOR_SIZE + offset;
-        return &self.data[start..start+len];
+        &self.data[sfc as usize][start..start+len]
     }
 
-    fn byte(&self, sector: usize, offset: usize) -> u8 {
+    fn byte(&self, sfc: u8, sector: usize, offset: usize) -> u8 {
         let start = sector * SECTOR_SIZE + offset;
-        return self.data[start];
+        self.data[sfc as usize][start]
     }
 
     fn str_from_null_term(bytes: &[u8]) -> String {
@@ -133,55 +176,55 @@ impl DfsImg {
     // See http://www.cowsarenotpurple.co.uk/bbccomputer/native/adfs.html
     // for more info on DFS format, also:
     // https://area51.dev/bbc/bbcmos/filesystems/dfs/
-    pub fn cat(&self) -> Cat {
+    pub fn cat(&self, sfc: u8) -> Cat {
         let mut cat = Cat::default();
 
         cat.label =
-              Self::str_from_null_term(self.offs(0, 0, 8))
-            + &Self::str_from_null_term(self.offs(1, 0, 3));
+              Self::str_from_null_term(self.offs(sfc, 0, 0, 8))
+            + &Self::str_from_null_term(self.offs(sfc, 1, 0, 3));
         // Cycle Number is in BCD format
-        cat.cycle = (self.byte(1, 4) >> 4) * 10 + (self.byte(1, 4) & 0xf);
-        cat.nfiles = (self.byte(1, 5) >> 3) as usize;
+        cat.cycle = (self.byte(sfc, 1, 4) >> 4) * 10 + (self.byte(sfc, 1, 4) & 0xf);
+        cat.nfiles = (self.byte(sfc, 1, 5) >> 3) as usize;
         if cat.nfiles > (SECTOR_SIZE-8) {
-            println!("warning - number of files ({:}) too large.", cat.nfiles);
+            println!("warning - number of files ({}) too large.", cat.nfiles);
         }
         cat.nsectors = u16::from_le_bytes([
-            self.byte(1, 7),
-            self.byte(1, 6) & 0x0f,
+            self.byte(sfc, 1, 7),
+            self.byte(sfc, 1, 6) & 0x0f,
         ]) as usize;
-        cat.boot_option = (self.byte(1, 6) >> 4) & 0xf;
+        cat.boot_option = (self.byte(sfc, 1, 6) >> 4) & 0xf;
         cat.files = Vec::new();
         for i in 0..cat.nfiles {
             let mut file = CatFile::default();
             let j = 8 + i * 8;
             // Sector 0 contains the name info in 8-byte blocks
-            file.name = Self::str_from_null_term(self.offs(0, j, 7)).trim().into();
+            file.name = Self::str_from_null_term(self.offs(sfc, 0, j, 7)).trim().into();
             // Dir and lock state
-            file.dir = ascii_to_char(self.byte(0, j + 7) & 0x7f);
-            file.locked = self.byte(0, j + 7) & 0x80 > 0;
+            file.dir = ascii_to_char(self.byte(sfc, 0, j + 7) & 0x7f);
+            file.locked = self.byte(sfc, 0, j + 7) & 0x80 > 0;
      
             // Sector 1 contains the addresses, lengths and locations.
             file.load_addr = u32::from_le_bytes([
-                self.byte(1, j + 0),
-                self.byte(1, j + 1),
-                (self.byte(1, j + 6) >> 2) & 3,
+                self.byte(sfc, 1, j + 0),
+                self.byte(sfc, 1, j + 1),
+                (self.byte(sfc, 1, j + 6) >> 2) & 3,
                  0
             ]);
             file.exec_addr = u32::from_le_bytes([
-                self.byte(1, j + 2),
-                self.byte(1, j + 3),
-                (self.byte(1, j + 6) >> 6) & 3,
+                self.byte(sfc, 1, j + 2),
+                self.byte(sfc, 1, j + 3),
+                (self.byte(sfc, 1, j + 6) >> 6) & 3,
                 0
             ]);
             file.size = u32::from_le_bytes([
-                self.byte(1, j + 4),
-                self.byte(1, j + 5),
-                (self.byte(1, j + 6) >> 4) & 3,
+                self.byte(sfc, 1, j + 4),
+                self.byte(sfc, 1, j + 5),
+                (self.byte(sfc, 1, j + 6) >> 4) & 3,
                 0
             ]);
             file.sector = u16::from_le_bytes([
-                self.byte(1, j + 7),
-                (self.byte(1, j + 6) >> 0) & 3,
+                self.byte(sfc, 1, j + 7),
+                (self.byte(sfc, 1, j + 6) >> 0) & 3,
             ]);
             cat.files.push(file);
         }
