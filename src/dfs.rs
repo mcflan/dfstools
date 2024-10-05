@@ -163,8 +163,8 @@ impl DfsImg {
         let mut side1: Vec<u8> = Vec::new();
         if dsd {
             for t in 0..tracks {
-                let start0 = (t + 0) * TRACK_SIZE;
-                let start1 = (t + 1) * TRACK_SIZE;
+                let start0 = (t * 2 + 0) * TRACK_SIZE;
+                let start1 = (t * 2 + 1) * TRACK_SIZE;
                 side0.extend_from_slice(&data[start0..start0+TRACK_SIZE]);
                 side1.extend_from_slice(&data[start1..start1+TRACK_SIZE]);
             }
@@ -273,10 +273,10 @@ impl DfsImg {
         let pathbuf = path.join(file.fullname());
         let dest = pathbuf.as_path();
 
-        eprintln!("Extracting {:} to {:?}", file.name, &dest);
+        eprintln!("Extracting {:} to {:?}", file.fullname(), &dest);
         let mut my_buf = BufWriter::new(File::create(dest)?);
 
-        my_buf.write_all(self.offs(0, file.sector as usize, 0, file.size as usize))?;
+        my_buf.write_all(self.offs(sfc, file.sector as usize, 0, file.size as usize))?;
 
         Ok(())
     }
