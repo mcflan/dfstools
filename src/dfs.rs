@@ -8,9 +8,11 @@
 ///
 /// James Macfarlane 2024
 
-use std::io::{self, BufReader, Read};
-use std::fs::File;
+use std::io::{self, BufReader, Read, BufWriter, Write};
+use std::fs::{File, create_dir_all};
 use std::path::Path;
+
+use glob_match::glob_match;
 
 pub const SECTOR_SIZE: usize             = 256;
 pub const SECTORS_PER_TRACK: usize       = 10;
@@ -18,7 +20,7 @@ pub const TRACK_SIZE: usize              = SECTOR_SIZE * SECTORS_PER_TRACK;
 pub const LABEL_SIZE: usize              = 12;
 pub const FILENAME_LEN: usize            = 7;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct CatFile {
     name: String,
     dir: char,
@@ -28,6 +30,14 @@ pub struct CatFile {
     size: u32, 
     sector: u16, 
 }
+
+impl CatFile {
+    pub fn fullname(&self) -> String {
+        format!("{}.{}", self.dir, self.name)
+    }
+
+}
+
 
 #[derive(Default, Debug)]
 pub struct Cat {
@@ -40,7 +50,14 @@ pub struct Cat {
 }
 
 impl Cat {
+    /// Pretty-print the disk catalogue
     pub fn print(&self) {
+        self.print_info();
+        Self::print_header();
+        Self::print_files(&self.files);
+    }
+
+    pub fn print_info(&self) {
         let label = self.label.clone();
         //remove_nonprint_chars(label);
         println!("Label: {:11} Cycle: {:}, Tracks: {:2}, Boot Opt: {:}, {:2} files.",
@@ -50,10 +67,14 @@ impl Cat {
                 self.boot_option,
                 self.nfiles
                 );
-        if self.files.len() > 0 {
-            println!("   Name    Lock    Size    Sector  Load Addr  Exec Addr");
-        }
-        for f in &self.files {
+    }
+
+    pub fn print_header() {
+        println!("   Name    Lock    Size    Sector  Load Addr  Exec Addr");
+    }
+
+    pub fn print_files(files: &Vec<CatFile>) {
+        for f in files {
             if f.dir == '$' { // Don't show default dir
                 print!("   {:-7}  ", f.name);
             } else {
@@ -63,6 +84,21 @@ impl Cat {
                     if f.locked {"L"} else {" "},
                     f.size, f.sector, f.load_addr, f.exec_addr);
         }
+    }
+
+    /// Return all entries matching given (unix glob-style) filename pattern.
+    pub fn find(&self, pattern: &str) -> Vec<CatFile> {
+        let mut matches: Vec<CatFile> = Vec::new();
+        for f in &self.files {
+            if glob_match(pattern, &f.name) {
+                matches.push(f.clone());
+            }
+        }
+        matches
+    }
+
+    pub fn files(&self) -> Vec<CatFile> {
+        self.files.clone()
     }
 }
 
@@ -229,6 +265,35 @@ impl DfsImg {
             cat.files.push(file);
         }
         return cat;
+    }
+
+    /// Extract given file catalogue entry to path.
+    pub fn extract_file(&self, sfc: u8, file: &CatFile, path: &Path) -> io::Result<()> {
+
+        let pathbuf = path.join(file.fullname());
+        let dest = pathbuf.as_path();
+
+        eprintln!("Extracting {:} to {:?}", file.name, &dest);
+        let mut my_buf = BufWriter::new(File::create(dest)?);
+
+        my_buf.write_all(self.offs(0, file.sector as usize, 0, file.size as usize))?;
+
+        Ok(())
+    }
+
+    /// Extract given list of file catalogue entries into dir.
+    pub fn extract_files(&self, sfc: u8, files: Vec<CatFile>, dir: &str) -> io::Result<()> {
+        let path = Path::new(dir);
+        // Create dir if needed
+        create_dir_all(dir)?;
+
+        // Extract files
+        for f in &files {
+            self.extract_file(sfc, f, path)?;
+        }
+
+
+        Ok(())
     }
 
 }
