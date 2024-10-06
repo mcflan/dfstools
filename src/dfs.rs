@@ -51,10 +51,14 @@ pub struct Cat {
 
 impl Cat {
     /// Pretty-print the disk catalogue
-    pub fn print(&self) {
+    pub fn print(&self, files: Option<&Vec<CatFile>>) {
         self.print_info();
         Self::print_header();
-        Self::print_files(&self.files);
+        if let Some(f) = files {
+            Self::print_files(f);
+        } else {
+            Self::print_files(&self.files);
+        }
     }
 
     pub fn print_info(&self) {
@@ -90,7 +94,7 @@ impl Cat {
     pub fn find(&self, pattern: &str) -> Vec<CatFile> {
         let mut matches: Vec<CatFile> = Vec::new();
         for f in &self.files {
-            if glob_match(pattern, &f.name) {
+            if glob_match(pattern, &f.fullname()) {
                 matches.push(f.clone());
             }
         }
