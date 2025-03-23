@@ -11,6 +11,7 @@
 use std::io::{self, BufReader, Read, BufWriter, Write};
 use std::fs::{File, create_dir_all};
 use std::path::Path;
+use std::cmp::min;
 
 use glob_match::glob_match;
 
@@ -110,6 +111,7 @@ impl Cat {
 pub struct DfsImg {
     data: [Vec<u8>; 2],
     dsd: bool,
+    ntracks: usize,
 }
 
 fn ascii_to_char(a: u8) -> char {
@@ -145,28 +147,36 @@ impl DfsImg {
         let my_buf = BufReader::new(File::open(filename)?);
         let data = my_buf.bytes().collect::<Result<Vec<_>,_>>()?;
 
-        let size = data.len() / if dsd { 2 } else { 1 };
+        let img_size = data.len();
+        let nsides: usize = if dsd { 2 } else { 1 };
+        // Number of tracks per side
+        let ntracks = img_size / nsides / TRACK_SIZE;
 
         // Check input file size makes sense
-        if (size % TRACK_SIZE) > 0 {
-            let err = io::Error::other(format!("{}: size of file ({:}) is not a multiple of DFS track size ({}).",
-                    filename, size, TRACK_SIZE));
-            return Err(err);
+        if dsd {
+            if (img_size % (TRACK_SIZE * 2)) != 0 {
+                eprintln!("{}: Warning: size of double-sided image ({:}) is not a multiple of 2 * track size ({}).",
+                        filename, img_size, TRACK_SIZE * 2);
+            }
+        } else {
+            if (img_size % TRACK_SIZE) != 0 {
+                eprintln!("{}: Warning: size of image ({:}) is not a multiple of track size ({}).",
+                        filename, img_size, TRACK_SIZE);
+            }
         }
 
-        if (size / TRACK_SIZE) < 2 {
+
+        if ntracks < 2 {
             let err = io::Error::other(format!("{}: size of file ({:}) is too small to hold a catalogue.",
-                    filename, size));
+                    filename, img_size));
             return Err(err);
         }
-
-        let tracks = size / TRACK_SIZE;
 
         // Double-sided image has tracks interleaved
         let mut side0: Vec<u8> = Vec::new();
         let mut side1: Vec<u8> = Vec::new();
         if dsd {
-            for t in 0..tracks {
+            for t in 0..ntracks {
                 let start0 = (t * 2 + 0) * TRACK_SIZE;
                 let start1 = (t * 2 + 1) * TRACK_SIZE;
                 side0.extend_from_slice(&data[start0..start0+TRACK_SIZE]);
@@ -182,6 +192,7 @@ impl DfsImg {
                 side1,
             ],
             dsd,
+            ntracks,
         })
     }
 
@@ -274,13 +285,25 @@ impl DfsImg {
     /// Extract given file catalogue entry to path.
     pub fn extract_file(&self, sfc: u8, file: &CatFile, path: &Path) -> io::Result<()> {
 
-        let pathbuf = path.join(file.fullname());
+        let name = if file.dir == '$' { file.name.to_string() } else { file.fullname() };
+        let pathbuf = path.join(name);
         let dest = pathbuf.as_path();
 
         eprintln!("Extracting {:} to {:?}", file.fullname(), &dest);
         let mut my_buf = BufWriter::new(File::create(dest)?);
 
-        my_buf.write_all(self.offs(sfc, file.sector as usize, 0, file.size as usize))?;
+        let nsectors = self.ntracks * SECTORS_PER_TRACK;
+        if file.sector as usize >= nsectors {
+            eprintln!("{:}: file lies outside given image, skipping.", file.fullname());
+            return Ok(());
+        }
+        let len = min(file.size as usize,(nsectors - file.sector as usize) * SECTOR_SIZE);
+        if len != file.size as usize {
+            eprintln!("{:}: some of file lies outside given image, truncating {:} to {:}",
+                file.fullname(), file.size, len);
+        }
+
+        my_buf.write_all(self.offs(sfc, file.sector as usize, 0, len))?;
 
         Ok(())
     }
