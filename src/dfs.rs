@@ -294,7 +294,7 @@ impl DfsImg {
 
         let nsectors = self.ntracks * SECTORS_PER_TRACK;
         if file.sector as usize >= nsectors {
-            eprintln!("{:}: file lies outside given image, skipping.", file.fullname());
+            eprintln!("{:}: file lies outside given image, truncating to 0 bytes.", file.fullname());
             return Ok(());
         }
         let len = min(file.size as usize,(nsectors - file.sector as usize) * SECTOR_SIZE);
